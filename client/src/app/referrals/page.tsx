@@ -3,9 +3,16 @@
 import { useEffect, useState } from "react";
 import { useWallet } from "@/hooks/wallet";
 import { useContract, type Referral, type Campaign } from "@/hooks/contract";
-import { Card, CardHeader, CardContent, Badge, Button, LoadingState, EmptyState } from "@/components/ui";
+import {
+  Card,
+  CardHeader,
+  CardContent,
+  Badge,
+  Button,
+  LoadingState,
+  EmptyState,
+} from "@/components/ui";
 import { useToast } from "@/hooks/toast";
-import { supabase } from "@/lib/supabase/client";
 import { sanitizeInput } from "@/lib/validation";
 
 function statusVariant(status: string) {
@@ -25,8 +32,15 @@ function statusVariant(status: string) {
 
 export default function ReferralsPage() {
   const { connected, address, user } = useWallet();
-  const { getMyReferrals, submitReferral, verifyReferral, disputeReferral, resolveDispute, loading } =
-    useContract();
+  const {
+    getMyReferrals,
+    submitReferral,
+    verifyReferral,
+    disputeReferral,
+    resolveDispute,
+    claimCommission,
+    loading,
+  } = useContract();
   const { addToast } = useToast();
   const [referrals, setReferrals] = useState<Referral[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -54,6 +68,16 @@ export default function ReferralsPage() {
     setLoadingData(false);
   }
 
+  /** Helper to find the Soroban campaign ID and referral hash for on-chain calls */
+  function getOnChainContext(referral: Referral) {
+    const campaign = campaigns.find((c) => c.id === referral.campaign_id);
+    return {
+      sorobanCampaignId: campaign?.soroban_campaign_id || null,
+      referralHash: referral.referral_hash,
+      campaign,
+    };
+  }
+
   async function handleSubmitReferral(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedCampaign || !referralHash) {
@@ -66,7 +90,7 @@ export default function ReferralsPage() {
         referral_hash: sanitizeInput(referralHash),
         notes: referralNotes ? sanitizeInput(referralNotes) : undefined,
       });
-      addToast("Referral submitted successfully!", "success");
+      addToast("Referral submitted on-chain!", "success");
       setShowSubmitForm(false);
       setReferralHash("");
       setReferralNotes("");
@@ -80,11 +104,15 @@ export default function ReferralsPage() {
     }
   }
 
-  async function handleVerify(referralId: string) {
-    setActionLoading(referralId);
+  async function handleVerify(referral: Referral) {
+    setActionLoading(referral.id);
     try {
-      await verifyReferral(referralId);
-      addToast("Referral verified!", "success");
+      const { sorobanCampaignId, referralHash } = getOnChainContext(referral);
+      if (!sorobanCampaignId) {
+        throw new Error("Campaign not linked to on-chain contract");
+      }
+      await verifyReferral(referral.id, sorobanCampaignId, referralHash);
+      addToast("Referral verified on-chain!", "success");
       await loadData();
     } catch (err) {
       addToast(
@@ -96,15 +124,44 @@ export default function ReferralsPage() {
     }
   }
 
-  async function handleDispute(referralId: string) {
+  async function handleClaim(referral: Referral) {
+    setActionLoading(referral.id);
+    try {
+      const { sorobanCampaignId, referralHash } = getOnChainContext(referral);
+      if (!sorobanCampaignId) {
+        throw new Error("Campaign not linked to on-chain contract");
+      }
+      await claimCommission(referral.id, sorobanCampaignId, referralHash);
+      addToast("Commission claimed on-chain!", "success");
+      await loadData();
+    } catch (err) {
+      addToast(
+        err instanceof Error ? err.message : "Failed to claim commission",
+        "error"
+      );
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handleDispute(referral: Referral) {
     if (!disputeReason.trim()) {
       addToast("Please provide a reason", "error");
       return;
     }
-    setActionLoading(referralId);
+    setActionLoading(referral.id);
     try {
-      await disputeReferral(referralId, sanitizeInput(disputeReason));
-      addToast("Dispute opened", "success");
+      const { sorobanCampaignId, referralHash } = getOnChainContext(referral);
+      if (!sorobanCampaignId) {
+        throw new Error("Campaign not linked to on-chain contract");
+      }
+      await disputeReferral(
+        referral.id,
+        sanitizeInput(disputeReason),
+        sorobanCampaignId,
+        referralHash
+      );
+      addToast("Dispute opened on-chain!", "success");
       setDisputeId(null);
       setDisputeReason("");
       await loadData();
@@ -118,11 +175,20 @@ export default function ReferralsPage() {
     }
   }
 
-  async function handleResolve(referralId: string, inFavor: boolean) {
-    setActionLoading(referralId);
+  async function handleResolve(referral: Referral, inFavor: boolean) {
+    setActionLoading(referral.id);
     try {
-      await resolveDispute(referralId, inFavor);
-      addToast("Dispute resolved", "success");
+      const { sorobanCampaignId, referralHash } = getOnChainContext(referral);
+      if (!sorobanCampaignId) {
+        throw new Error("Campaign not linked to on-chain contract");
+      }
+      await resolveDispute(
+        referral.id,
+        inFavor,
+        sorobanCampaignId,
+        referralHash
+      );
+      addToast("Dispute resolved on-chain!", "success");
       await loadData();
     } catch (err) {
       addToast(
@@ -153,9 +219,11 @@ export default function ReferralsPage() {
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Referrals</h1>
+          <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">
+            Referrals
+          </h1>
           <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-            Submit and manage commission referrals
+            Submit and manage commission referrals on-chain
           </p>
         </div>
         <Button onClick={() => setShowSubmitForm(!showSubmitForm)}>
@@ -167,7 +235,9 @@ export default function ReferralsPage() {
       {showSubmitForm && (
         <Card className="mb-8">
           <CardHeader>
-            <h2 className="font-semibold text-zinc-900 dark:text-white">New Referral</h2>
+            <h2 className="font-semibold text-zinc-900 dark:text-white">
+              New Referral
+            </h2>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmitReferral} className="space-y-4">
@@ -266,7 +336,8 @@ export default function ReferralsPage() {
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
                       <span>
                         Campaign:{" "}
-                        {referral.campaigns?.title || referral.campaign_id.slice(0, 8)}
+                        {referral.campaigns?.title ||
+                          referral.campaign_id.slice(0, 8)}
                       </span>
                       <span>
                         {new Date(referral.created_at).toLocaleDateString()}
@@ -285,7 +356,7 @@ export default function ReferralsPage() {
                       isBusinessForReferral(referral) && (
                         <Button
                           size="sm"
-                          onClick={() => handleVerify(referral.id)}
+                          onClick={() => handleVerify(referral)}
                           disabled={actionLoading === referral.id}
                         >
                           {actionLoading === referral.id
@@ -298,42 +369,7 @@ export default function ReferralsPage() {
                     {referral.status === "verified" && !referral.paid && (
                       <Button
                         size="sm"
-                        onClick={async () => {
-                          setActionLoading(referral.id);
-                          try {
-                            const res = await fetch(
-                              `/api/referrals/${referral.id}/claim`,
-                              {
-                                method: "POST",
-                                headers: {
-                                  "Content-Type": "application/json",
-                                },
-                                body: JSON.stringify({
-                                  wallet_address: address,
-                                }),
-                              }
-                            );
-                            const result = await res.json();
-                            if (!res.ok)
-                              throw new Error(
-                                result.error || "Failed to claim"
-                              );
-                            addToast(
-                              "Commission claimed! Transaction submitted.",
-                              "success"
-                            );
-                            await loadData();
-                          } catch (err) {
-                            addToast(
-                              err instanceof Error
-                                ? err.message
-                                : "Failed to claim",
-                              "error"
-                            );
-                          } finally {
-                            setActionLoading(null);
-                          }
-                        }}
+                        onClick={() => handleClaim(referral)}
                         disabled={actionLoading === referral.id}
                       >
                         {actionLoading === referral.id
@@ -364,7 +400,7 @@ export default function ReferralsPage() {
                       <div className="flex gap-1">
                         <Button
                           size="sm"
-                          onClick={() => handleResolve(referral.id, true)}
+                          onClick={() => handleResolve(referral, true)}
                           disabled={actionLoading === referral.id}
                         >
                           Favor Agent
@@ -372,7 +408,7 @@ export default function ReferralsPage() {
                         <Button
                           size="sm"
                           variant="danger"
-                          onClick={() => handleResolve(referral.id, false)}
+                          onClick={() => handleResolve(referral, false)}
                           disabled={actionLoading === referral.id}
                         >
                           Reject
@@ -396,7 +432,10 @@ export default function ReferralsPage() {
                       <Button
                         size="sm"
                         variant="danger"
-                        onClick={() => handleDispute(referral.id)}
+                        onClick={() => {
+                          const ref = referrals.find((r) => r.id === disputeId);
+                          if (ref) handleDispute(ref);
+                        }}
                         disabled={actionLoading === referral.id}
                       >
                         Submit Dispute

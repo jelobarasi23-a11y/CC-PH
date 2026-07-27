@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "contract": "file:packages/contract",
     "@stellar/freighter-api": "^6.0.1",
     "@stellar/stellar-sdk": "^16.1.0",
     "@supabase/ssr": "^0.12.3",

@@ -42,11 +42,15 @@ export default function CampaignsPage() {
     setLoadingCampaigns(false);
   }
 
-  async function handleFund(campaignId: string) {
-    setFundingId(campaignId);
+  async function handleFund(campaign: Campaign) {
+    setFundingId(campaign.id);
     try {
-      await fundCampaign(campaignId);
-      addToast("Campaign funded successfully!", "success");
+      if (!campaign.soroban_campaign_id) {
+        throw new Error("Campaign is not linked to a Soroban contract");
+      }
+      const amount = campaign.commission_amount * campaign.max_referrals;
+      await fundCampaign(campaign.soroban_campaign_id, amount);
+      addToast("Campaign funded successfully on-chain and in database!", "success");
       await loadCampaigns();
     } catch (err) {
       addToast(
@@ -144,7 +148,7 @@ export default function CampaignsPage() {
               <div className="px-6 pb-4">
                 {campaign.status === "draft" && isBusiness(campaign) && (
                   <Button
-                    onClick={() => handleFund(campaign.id)}
+                    onClick={() => handleFund(campaign)}
                     disabled={fundingId === campaign.id || loading}
                     className="w-full"
                   >
